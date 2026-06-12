@@ -23,13 +23,25 @@ file=''
 password="${PUBIFACT_PASSWORD:-}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -p|--password) password="${2:-}"; shift 2 ;;
-    -h|--help) echo "usage: publish.sh <file> [--password <secret>]" >&2; exit 0 ;;
-    *) [ -z "$file" ] && file="$1"; shift ;;
+    -p | --password)
+      password="${2:-}"
+      shift 2
+      ;;
+    -h | --help)
+      echo "usage: publish.sh <file> [--password <secret>]" >&2
+      exit 0
+      ;;
+    *)
+      [ -z "$file" ] && file="$1"
+      shift
+      ;;
   esac
 done
 
-{ [ -n "$file" ] && [ -f "$file" ]; } || { echo "usage: publish.sh <file> [--password <secret>]" >&2; exit 2; }
+{ [ -n "$file" ] && [ -f "$file" ]; } || {
+  echo "usage: publish.sh <file> [--password <secret>]" >&2
+  exit 2
+}
 
 log() { printf '%s\n' "$*" >&2; }
 
