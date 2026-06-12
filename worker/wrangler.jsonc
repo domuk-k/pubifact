@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pubifact",
+  "main": "src/index.js",
+  "compatibility_date": "2026-06-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+
+  // Object storage for uploaded artifacts. Create once with:
+  //   npx wrangler r2 bucket create pubifact
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pubifact" }]
+
+  // Optional abuse gate — require a token on /up:
+  //   npx wrangler secret put UPLOAD_TOKEN
+  // Leave unset for a fully open, zero-setup endpoint.
+}

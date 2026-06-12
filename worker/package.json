@@ -1,0 +1,17 @@
+{
+  "name": "pubifact-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "bucket": "wrangler r2 bucket create pubifact"
+  },
+  "dependencies": {
+    "marked": "^14"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}
