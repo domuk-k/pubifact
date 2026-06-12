@@ -17,7 +17,7 @@ Two pieces:
 
 | Piece | What | Where |
 |-------|------|-------|
-| **skill** | The thin client an agent runs (`publish.sh` + `SKILL.md`). Reads config, falls back to a temporary link. | [`skills/pubifact/`](skills/pubifact/) |
+| **skill** | The thin client an agent runs (`publish.sh` + `SKILL.md`). Reads config, prompts you to run `init.sh` if none is set. | [`skills/pubifact/`](skills/pubifact/) |
 | **worker** | A free `POST file → URL` service: Cloudflare Worker + R2, renders Markdown. | [`worker/`](worker/) |
 
 See [`DESIGN.md`](DESIGN.md) for the why.
@@ -33,11 +33,10 @@ npx skills add domuk-k/pubifact
 
 Then ask your agent to "publish this" or "share this page". That's it.
 
-**How the first publish works — lazy bootstrap.** The skill does not require a
-backend to be configured up front. On the first publish it uploads via a
-temporary public link (~1 hour) so you see it work immediately, then offers to
-set up your own permanent free instance. You can accept then or skip and do it
-later.
+**How the first publish works — init-first.** On the first publish the skill
+detects that no instance is configured and offers to set up your own free
+permanent instance (~2 minutes). No content is uploaded to any third-party host
+— your data only ever reaches your own infrastructure.
 
 Alternatively, install by hand with a symlink:
 

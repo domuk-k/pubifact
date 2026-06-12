@@ -68,9 +68,9 @@ Phase 4 — *not built now*.
 ## Onboarding (two paths — both BYOK, both land at "your own instance")
 
 - **Agent users (P1):** `npx skills add <owner>/pubifact` → on the first
-  "publish this", the skill **self-bootstraps**: it publishes via the instant
-  fallback (temporary link) so you see it work, then offers to deploy your own
-  permanent instance (`init.sh`). Lazy, progressive — first value in seconds.
+  "publish this", the skill detects no instance is configured and offers to
+  deploy your own permanent instance (`init.sh`, ~2 min). Your data never
+  touches a third-party host — init-first, always your infra.
 - **Anyone / non-CLI:** a **"Deploy to Cloudflare" button** in the README →
   clone-to-your-account + auto-provision R2 + deploy, no CLI, no agent.
 
@@ -81,7 +81,9 @@ Phase 4 — *not built now*.
 ### Phase 0 — ✅ Done
 Worker + R2 backend · Markdown→HTML render · per-link password · optional
 `UPLOAD_TOKEN` · 5 MB cap · the `pubifact` skill (`skills/pubifact/` layout,
-installed) · docs · a live reference instance *(retired in Phase 1)*.
+installed) · docs · a live reference instance *(retired in Phase 1)* ·
+tmpfiles.org fallback *(removed in Phase 1 — rejected HTML/Markdown
+unpredictably and leaked content to a third-party host)*.
 
 ### Phase 1 — OSS + BYOK + seamless onboarding  *(next)*
 - [ ] **Retire the shared reference instance**; remove the silent central default.
@@ -90,8 +92,8 @@ installed) · docs · a live reference instance *(retired in Phase 1)*.
 - [ ] **`init.sh`** — agent-driven, wrangler-wrapped, **narration-abstracted**
       (pubifact terms, wrangler output hidden, errors re-narrated, ownership kept
       transparent).
-- [ ] **Lazy self-bootstrap** — first publish → instant fallback link + offer to
-      deploy your own.
+- [ ] **Init-first onboarding** — first publish without an instance → offer to
+      deploy your own (init.sh); no fallback to third-party hosts.
 - [ ] **"Deploy to Cloudflare" button** + **public GitHub repo** + skills.sh
       (`npx skills add`).
 - [ ] **SKILL.md** — branding / narration guidance for the agent.

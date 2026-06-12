@@ -18,8 +18,9 @@ change to the `POST /up` / `GET /:key` API or the `publish.sh` CLI contract.
   `publish.sh` reads it with env vars as override.
 - `init.sh` — agent-driven self-hosting bootstrap (wraps wrangler, narrates in
   pubifact terms).
-- Lazy self-bootstrap: first publish without config falls back to a temporary
-  link and offers to deploy a permanent instance.
+- Init-first onboarding: first publish without config exits 3 and offers to
+  deploy a permanent instance via `init.sh` (replaces the removed tmpfiles
+  fallback — see Changed).
 - Worker migrated to TypeScript; `worker/src/lib.ts` extracts pure helpers.
 - Vitest + `@cloudflare/vitest-pool-workers` integration tests for the worker.
 - bats integration tests for `publish.sh` and `init.sh`.
@@ -28,8 +29,14 @@ change to the `POST /up` / `GET /:key` API or the `publish.sh` CLI contract.
 ### Changed
 - `POST /up` plain-text response is now two lines — line 1 the URL, line 2 the
   delete token. Capture line 1 if you only want the URL.
-- The skill no longer defaults to a shared reference instance; without config
-  it uses the temporary fallback and offers self-hosting.
+- The skill no longer defaults to a shared reference instance.
+- `publish.sh` switched to **init-first**: no instance configured → exit 3 +
+  stderr `no instance configured — nothing was uploaded` + path to `init.sh`.
+  The previous tmpfiles.org fallback is removed. Reason: tmpfiles rejected
+  HTML/Markdown files unpredictably ("Invalid file name/type") and uploaded
+  content to a third-party host with no ownership guarantee. Exit codes
+  clarified: 0 success · 1 instance unreachable/publish failed · 2 usage ·
+  3 no instance configured (run init.sh) · 4 auth or size error.
 
 ## [0.1.0] - 2026-06-10
 

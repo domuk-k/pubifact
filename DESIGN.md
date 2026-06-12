@@ -24,8 +24,8 @@ identical across agents:
 
 1. **Configured endpoint** (`~/.config/pubifact/config.json` or env var) — your
    own Cloudflare Worker. Persistent, clean URL, fully under your control.
-2. **tmpfiles.org** — no account, ephemeral (~1h). Fallback so the skill is
-   usable before a backend is deployed; the skill offers to set one up.
+2. **No endpoint configured** — exit 3; stderr points at `init.sh` to set up a
+   free permanent instance in ~2 minutes. No third-party host is contacted.
 
 > An earlier draft also tried a GitHub gist + githack render proxy. Dropped: it
 > binds links to an individual's GitHub account, depends on a third-party proxy
@@ -102,6 +102,6 @@ for "share with specific people". Documented in the README caveats.
 - Skill + worker implemented and verified end-to-end (local + live).
 - Skill installable via `npx skills add domuk-k/pubifact` and laid out as
   `skills/pubifact/SKILL.md`.
-- Onboarding: lazy bootstrap (first publish via tmpfiles fallback, then offer to
-  deploy your own permanent instance via `init.sh`).
+- Onboarding: init-first (first publish without an instance → exit 3 + offer to
+  deploy your own permanent instance via `init.sh`; no third-party fallback).
 - Remaining for public release: push to a public GitHub repo.

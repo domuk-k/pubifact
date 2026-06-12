@@ -65,14 +65,11 @@ Advanced override: `PUBIFACT_ENDPOINT`, `PUBIFACT_TOKEN`, `PUBIFACT_PASSWORD`,
 
 ## First-time setup (self-bootstrap)
 
-**Normal publish — no config yet:** stderr will contain
-`no instance configured`. The URL is a temporary fallback that **expires in
-~1 hour**. Tell the user: *"That link is live but expires in about an hour. Want
-me to set up your own free permanent artifact server? It takes about 2 minutes
-and you own everything."*
-
-**Password + no config:** `publish.sh` exits 3 and uploads nothing. Go straight
-to the setup offer — no temporary link was produced.
+**No instance configured yet:** `publish.sh` exits 3 and stderr contains
+`no instance configured — nothing was uploaded`. Nothing is uploaded.
+Tell the user: *"You don't have an instance set up yet. Want me to set up your
+own free permanent artifact server? It takes about 2 minutes and you own
+everything."*
 
 **If the user says yes, run the three-step bootstrap:**
 
