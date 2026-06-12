@@ -101,7 +101,11 @@ installed) · docs · a live reference instance *(retired in Phase 1)*.
 
 ### Phase 2 — File-server core
 - [ ] **TTL / auto-expire** (`--ttl`) for short-lived artifacts.
-- [ ] **List / delete** your own artifacts (management token).
+- [x] **Delete** your own artifacts — per-artifact take-down token (minted on
+      every publish), with an operator override via `UPLOAD_TOKEN`.
+- [ ] **List** your own artifacts — needs an index-design decision first:
+      per-artifact tokens carry no publisher identity, so "list *your own*" is
+      not expressible yet without an ownership/indexing model.
 - [ ] (maybe) custom slug / in-place update (re-publish to the same URL).
 - **Done when:** you can see, expire, delete, and refresh what you've published.
 
