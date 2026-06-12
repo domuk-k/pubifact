@@ -10,7 +10,7 @@ async function publish(
   const form = new FormData()
   form.append('file', new File([content], name, { type: 'text/html' }))
   const res = await SELF.fetch('https://example.com/up', { method: 'POST', body: form })
-  const [url, token] = (await res.text()).split('\n')
+  const [url = '', token = ''] = (await res.text()).split('\n')
   return { url, token }
 }
 

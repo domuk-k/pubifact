@@ -9,7 +9,7 @@ async function uploadFile(content: string, name: string, password?: string): Pro
 
   const res = await SELF.fetch('https://example.com/up', { method: 'POST', body: form })
   // Response is two lines: line 1 = URL, line 2 = delete token. Return the URL.
-  const url = (await res.text()).split('\n')[0]
+  const [url = ''] = (await res.text()).split('\n')
   return url
 }
 

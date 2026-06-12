@@ -21,7 +21,7 @@ describe('upload — POST /up', () => {
 
     const uploadRes = await SELF.fetch('https://example.com/up', { method: 'POST', body: form })
     expect(uploadRes.status).toBe(200)
-    const url = (await uploadRes.text()).split('\n')[0]
+    const [url = ''] = (await uploadRes.text()).split('\n')
 
     const serveRes = await SELF.fetch(url)
     expect(serveRes.status).toBe(200)
@@ -38,7 +38,7 @@ describe('upload — POST /up', () => {
       body: mdContent,
     })
     expect(res.status).toBe(200)
-    const url = (await res.text()).split('\n')[0]
+    const [url = ''] = (await res.text()).split('\n')
 
     const serveRes = await SELF.fetch(url)
     const html = await serveRes.text()
