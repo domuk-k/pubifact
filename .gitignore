@@ -10,4 +10,4 @@ coverage/
 worker-configuration.d.ts
 
 # internal session notes, not OSS-facing
-docs/handoff/
+docs/handoffs/
