@@ -34,7 +34,7 @@ interface Env {
 }
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, _ctx) {
     const url = new URL(req.url)
     const { pathname } = url
 
