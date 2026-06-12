@@ -9,8 +9,9 @@ describe('upload — POST /up', () => {
     const res = await SELF.fetch('https://example.com/up', { method: 'POST', body: form })
     expect(res.status).toBe(200)
 
+    // Two lines: line 1 = URL, line 2 = delete token (16-byte hex).
     const body = await res.text()
-    expect(body).toMatch(/^https:\/\/.+\/[a-z2-9]{8}\.html\n$/)
+    expect(body).toMatch(/^https:\/\/.+\/[a-z2-9]{8}\.html\n[0-9a-f]{32}\n$/)
   })
 
   it('markdown file upload → fetching the URL renders <em> and <title>', async () => {
@@ -20,7 +21,7 @@ describe('upload — POST /up', () => {
 
     const uploadRes = await SELF.fetch('https://example.com/up', { method: 'POST', body: form })
     expect(uploadRes.status).toBe(200)
-    const url = (await uploadRes.text()).trim()
+    const url = (await uploadRes.text()).split('\n')[0]
 
     const serveRes = await SELF.fetch(url)
     expect(serveRes.status).toBe(200)
@@ -37,7 +38,7 @@ describe('upload — POST /up', () => {
       body: mdContent,
     })
     expect(res.status).toBe(200)
-    const url = (await res.text()).trim()
+    const url = (await res.text()).split('\n')[0]
 
     const serveRes = await SELF.fetch(url)
     const html = await serveRes.text()

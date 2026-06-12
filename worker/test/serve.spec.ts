@@ -8,8 +8,8 @@ async function uploadFile(content: string, name: string, password?: string): Pro
   if (password) form.append('password', password)
 
   const res = await SELF.fetch('https://example.com/up', { method: 'POST', body: form })
-  const url = (await res.text()).trim()
-  // Return full URL
+  // Response is two lines: line 1 = URL, line 2 = delete token. Return the URL.
+  const url = (await res.text()).split('\n')[0]
   return url
 }
 

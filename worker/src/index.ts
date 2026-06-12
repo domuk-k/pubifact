@@ -46,6 +46,8 @@ export default {
       return upload(req, env, url)
     }
 
+    if (req.method === 'DELETE') return remove(req, env, url)
+
     const isRead = req.method === 'GET' || req.method === 'HEAD'
     if (isRead && pathname === '/') {
       const body = req.method === 'HEAD' ? null : home(url.origin)
@@ -101,13 +103,27 @@ async function upload(req: Request, env: Env, url: URL): Promise<Response> {
     stored = new TextEncoder().encode(mdShell(rendered, titleFrom(filename, src)))
   }
 
+  // customMetadata carries two independent, salted-hash keypairs:
+  //   pwsalt/pwhash  — optional read protection (who can VIEW the page)
+  //   delsalt/delhash — always set; gates takedown (who can DELETE the page)
+  const meta: Record<string, string> = {}
+
   // Optional per-link read protection: store a salted hash, enforced on GET.
-  const putOpts: R2PutOptions = {
-    httpMetadata: { contentType: 'text/html; charset=utf-8' },
-  }
   if (password) {
     const salt = randomHex(16)
-    putOpts.customMetadata = { pwsalt: salt, pwhash: await hashPw(password, salt) }
+    meta.pwsalt = salt
+    meta.pwhash = await hashPw(password, salt)
+  }
+
+  // Per-artifact takedown token: minted on every upload, returned once.
+  const deleteToken = randomHex(16)
+  const delsalt = randomHex(16)
+  meta.delsalt = delsalt
+  meta.delhash = await hashPw(deleteToken, delsalt)
+
+  const putOpts: R2PutOptions = {
+    httpMetadata: { contentType: 'text/html; charset=utf-8' },
+    customMetadata: meta,
   }
 
   const key = `${randomSlug()}.html`
@@ -115,10 +131,42 @@ async function upload(req: Request, env: Env, url: URL): Promise<Response> {
 
   const link = `${url.origin}/${key}`
   if ((req.headers.get('accept') || '').includes('application/json')) {
-    return json({ url: link }, 200)
+    return json({ url: link, deleteToken }, 200)
   }
-  // Plain text by default — easy to capture from curl.
-  return text(`${link}\n`, 200)
+  // Plain text by default — line 1 = URL (capture this), line 2 = delete token.
+  return text(`${link}\n${deleteToken}\n`, 200)
+}
+
+async function remove(req: Request, env: Env, url: URL): Promise<Response> {
+  const key = url.pathname.slice(1)
+  // Metadata only — no body fetch; we just need the delete-hash to authorize.
+  const obj = await env.BUCKET.head(key)
+  if (!obj) return text('not found\n', 404)
+
+  const auth = req.headers.get('authorization') || ''
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+
+  // Two ways to take down: the operator's master key, or the per-artifact token.
+  const operator = !!(env.UPLOAD_TOKEN && token === env.UPLOAD_TOKEN)
+  const delhash = obj.customMetadata?.delhash
+  const delsalt = obj.customMetadata?.delsalt || ''
+  const owner = !!(delhash && token && (await hashPw(token, delsalt)) === delhash)
+  if (!operator && !owner) return json({ error: 'unauthorized' }, 401)
+
+  await env.BUCKET.delete(key)
+
+  // Evict the edge cache so a public takedown is immediate. Defensive: the
+  // delete already succeeded, so a cache miss/throw here must not fail the call.
+  try {
+    await caches.default.delete(`${url.origin}/${key}`)
+  } catch {
+    /* edge cache may be unavailable (e.g. in tests) — ignore */
+  }
+
+  if ((req.headers.get('accept') || '').includes('application/json')) {
+    return json({ deleted: key }, 200)
+  }
+  return text('deleted\n', 200)
 }
 
 async function serve(req: Request, url: URL, env: Env, method: 'GET' | 'HEAD'): Promise<Response> {
