@@ -9,11 +9,15 @@
 # Usage:
 #   publish.sh <file>                      # .html or .md
 #   publish.sh <file> --password <secret>  # require the secret to VIEW the page
+#   publish.sh --down <url> --token <tok>  # take a published page back down
 #
 # With --password (or $PUBIFACT_PASSWORD) the page is read-protected: viewers
 # get an HTTP Basic prompt (any username + the secret) or append ?k=<secret>.
 # A password forces the configured endpoint only — it never falls back to an
 # unprotected public host.
+#
+# On publish, a one-time delete token is printed to the logs (stderr). Keep it
+# to take the page down later with --down (or set $PUBIFACT_DELETE_TOKEN).
 #
 # Exit codes:
 #   0  success
@@ -39,14 +43,24 @@ fi
 # --- arg parsing ---
 file=''
 password="${PUBIFACT_PASSWORD:-}"
+down_url=''
+delete_token="${PUBIFACT_DELETE_TOKEN:-}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -p | --password)
       password="${2:-}"
       shift 2
       ;;
+    --down)
+      down_url="${2:-}"
+      shift 2
+      ;;
+    --token)
+      delete_token="${2:-}"
+      shift 2
+      ;;
     -h | --help)
-      printf 'usage: publish.sh <file> [--password <secret>]\n' >&2
+      printf 'usage: publish.sh <file> [--password <secret>]\n       publish.sh --down <url> --token <delete-token>\n' >&2
       exit 0
       ;;
     *)
@@ -56,12 +70,46 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+log() { printf '%s\n' "$*" >&2; }
+
+# --- takedown mode: DELETE a published page ---
+if [ -n "$down_url" ]; then
+  if [ -z "$delete_token" ]; then
+    log "pubifact: a delete token is required to take a page down — pass --token <tok> or set \$PUBIFACT_DELETE_TOKEN"
+    exit 2
+  fi
+  # `|| true`: keep -e from killing us before we can read the status trailer.
+  down_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+    -X DELETE -H "Authorization: Bearer ${delete_token}" "$down_url" || true)"
+  case "$down_status" in
+    200)
+      log "pubifact: taken down — $down_url is gone"
+      printf 'taken down\n'
+      exit 0
+      ;;
+    401)
+      log "pubifact: wrong or missing delete token (HTTP 401) — cannot take down $down_url"
+      exit 4
+      ;;
+    404)
+      log "pubifact: already gone or unknown URL (HTTP 404) — $down_url"
+      exit 1
+      ;;
+    000)
+      log "pubifact: could not reach the host to take down $down_url (curl error)"
+      exit 1
+      ;;
+    *)
+      log "pubifact: takedown failed (HTTP $down_status) for $down_url"
+      exit 1
+      ;;
+  esac
+fi
+
 { [ -n "$file" ] && [ -f "$file" ]; } || {
   printf 'usage: publish.sh <file> [--password <secret>]\n' >&2
   exit 2
 }
-
-log() { printf '%s\n' "$*" >&2; }
 
 # Resolve the skill directory from the script's own real path (init.sh hints).
 # shellcheck disable=SC2155  # combined declare+assign: safe here, only used for messages
@@ -89,10 +137,18 @@ if [ -n "$ENDPOINT" ]; then
 
   case "$http_status" in
     200)
-      url="$body"
+      # Response body is up to two lines: line 1 = URL, line 2 = delete token.
+      # stdout MUST stay URL-only (the capture contract); the token goes to stderr.
+      url="${body%%$'\n'*}"
+      pub_token=''
+      [ "$body" != "$url" ] && pub_token="${body#*$'\n'}"
+      pub_token="${pub_token%%$'\n'*}" # first line only — body may carry a trailing newline
       if [ -n "$url" ]; then
         printf '%s\n' "$url"
         [ -n "$password" ] && log "(read-protected — share the password separately)"
+        if [ -n "$pub_token" ]; then
+          log "pubifact: take it down later with: publish.sh --down ${url} --token ${pub_token}"
+        fi
         exit 0
       fi
       log "pubifact: endpoint returned 200 but empty body — falling back"

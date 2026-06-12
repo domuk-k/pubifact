@@ -40,7 +40,7 @@ setup() {
   # Source just the json_get function and CONFIG resolution from publish.sh.
   # We test it by running publish.sh with the config in place and confirming
   # the endpoint is used (stub curl in ok mode hits /up → success).
-  run bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
+  run --separate-stderr bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
   [ "$status" -eq 0 ]
   # stdout should be the fake URL from the stub (ok mode, /up path).
   [ "$output" = "https://example-instance.workers.dev/abc123" ]
@@ -206,4 +206,59 @@ setup() {
 @test "nonexistent file exits 2" {
   run bash "$PUBLISH_SH" /tmp/does-not-exist-pubifact-test.html
   [ "$status" -eq 2 ]
+}
+
+# ---------------------------------------------------------------------------
+# takedown: publish hint + --down mode
+# ---------------------------------------------------------------------------
+
+@test "publish surfaces the delete token as a takedown hint on stderr" {
+  export PUBIFACT_ENDPOINT="https://my.instance.workers.dev"
+  run --separate-stderr bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
+  [ "$status" -eq 0 ]
+  # stdout stays URL-only even though the body now carries a second line.
+  [ "$output" = "https://example-instance.workers.dev/abc123" ]
+  [[ "$stderr" == *"--down https://example-instance.workers.dev/abc123 --token dtok0123456789abcdef0123456789ab"* ]]
+}
+
+@test "--down without token exits 2" {
+  run bash "$PUBLISH_SH" --down "https://my.instance.workers.dev/abc123.html"
+  [ "$status" -eq 2 ]
+}
+
+@test "--down with valid token takes the page down" {
+  run --separate-stderr bash "$PUBLISH_SH" \
+    --down "https://my.instance.workers.dev/abc123.html" --token "dtok123"
+  [ "$status" -eq 0 ]
+  [ "$output" = "taken down" ]
+  grep -q -- "-X DELETE" "$CURL_LOG"
+  grep -q "Authorization: Bearer dtok123" "$CURL_LOG"
+}
+
+@test "--down with wrong token exits 4" {
+  export CURL_MODE="auth-fail"
+  run bash "$PUBLISH_SH" \
+    --down "https://my.instance.workers.dev/abc123.html" --token "wrong"
+  [ "$status" -eq 4 ]
+}
+
+@test "--down on unknown URL exits 1" {
+  export CURL_MODE="gone"
+  run bash "$PUBLISH_SH" \
+    --down "https://my.instance.workers.dev/zzz.html" --token "dtok123"
+  [ "$status" -eq 1 ]
+}
+
+@test "--down network failure exits 1" {
+  export CURL_MODE="endpoint-down"
+  run bash "$PUBLISH_SH" \
+    --down "https://my.instance.workers.dev/abc123.html" --token "dtok123"
+  [ "$status" -eq 1 ]
+}
+
+@test "PUBIFACT_DELETE_TOKEN env var works for --down" {
+  export PUBIFACT_DELETE_TOKEN="envtok456"
+  run --separate-stderr bash "$PUBLISH_SH" --down "https://my.instance.workers.dev/abc123.html"
+  [ "$status" -eq 0 ]
+  grep -q "Authorization: Bearer envtok456" "$CURL_LOG"
 }

@@ -19,10 +19,17 @@ fi
 # We scan all args, track the previous arg to handle -H "value" style,
 # and collect everything that's not a flag or flag-value as the URL.
 has_w=false
+has_o=false
+is_delete=false
 url=''
 prev=''
 for arg in "$@"; do
   case "$prev" in
+    -X | --request)
+      [ "$arg" = "DELETE" ] && is_delete=true
+      prev="$arg"
+      continue
+      ;;
     # These flags consume the next argument as their value — skip it as URL
     -w | --write-out | -H | --header | -F | --form | -d | --data | \
       -o | --output | -u | --user | --connect-timeout | --max-time)
@@ -35,8 +42,12 @@ for arg in "$@"; do
       has_w=true
       prev="$arg"
       ;;
-    -H | --header | -F | --form | -d | --data | -o | --output | \
-      -u | --user | --connect-timeout | --max-time)
+    -o | --output)
+      has_o=true
+      prev="$arg"
+      ;;
+    -H | --header | -F | --form | -d | --data | \
+      -u | --user | -X | --request | --connect-timeout | --max-time)
       prev="$arg"
       ;;
     -*)
@@ -53,7 +64,11 @@ done
 
 emit() {
   # $1 = body, $2 = http_status
-  if $has_w; then
+  # With -o the body is discarded and -w writes the bare status (no newline),
+  # exactly like real curl with `-o /dev/null -w '%{http_code}'`.
+  if $has_o && $has_w; then
+    printf '%s' "$2"
+  elif $has_w; then
     printf '%s\n%s' "$1" "$2"
   else
     printf '%s' "$1"
@@ -69,10 +84,30 @@ case "$url" in
   */up/*) is_up=true ;;
 esac
 
+# DELETE (takedown) calls are independent of the up/tmpfiles split.
+if $is_delete; then
+  case "$MODE" in
+    ok) emit "deleted" "200" ;;
+    auth-fail) emit "" "401" ;;
+    gone) emit "" "404" ;;
+    endpoint-down | all-down)
+      emit "" "000"
+      exit 7
+      ;;
+    *)
+      printf 'stub curl: unknown CURL_MODE=%s\n' "$MODE" >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+
 case "$MODE" in
   ok)
     if $is_up; then
-      emit "https://example-instance.workers.dev/abc123" "200"
+      # Two-line body: URL then the per-artifact delete token (real worker shape).
+      emit 'https://example-instance.workers.dev/abc123
+dtok0123456789abcdef0123456789ab' "200"
     else
       # tmpfiles.org path
       emit '{"status":"ok","data":{"url":"https://tmpfiles.org/123/f.html"}}' "200"

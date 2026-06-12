@@ -39,6 +39,22 @@ hosted endpoint only — it never falls back to an unprotected public host.
 > If multiple files need a single landing page, publish each and share the
 > links, or stage them into one folder with an `index.html` first.
 
+## Taking it down
+
+Every publish prints a one-time **take-down token** to the logs (stderr),
+alongside a ready-to-run command. Keep that token if you might want to remove
+the page later — it's the only thing that can take it back down.
+
+To take a published page down:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-.}/publish.sh" --down "<url>" --token "<token>"
+```
+
+You can also set the token via `$PUBIFACT_DELETE_TOKEN` instead of `--token`.
+On success the script reports the page is taken down; a wrong or missing token
+is refused, and an unknown or already-removed URL is reported as such.
+
 ## How it decides where to publish (decision tree)
 
 The script tries these in order and uses the first that works:
