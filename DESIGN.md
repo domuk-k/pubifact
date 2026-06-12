@@ -22,9 +22,10 @@ that.
 A thin, agent-runnable script encoding a decision tree so the behavior is
 identical across agents:
 
-1. **Hosted endpoint** (`$PUBIFACT_ENDPOINT`) — zero account setup, the default.
-2. **tmpfiles.org** — no account, ephemeral (~1h). Emergency fallback so the
-   skill is usable even before the backend is deployed.
+1. **Configured endpoint** (`~/.config/pubifact/config.json` or env var) — your
+   own Cloudflare Worker. Persistent, clean URL, fully under your control.
+2. **tmpfiles.org** — no account, ephemeral (~1h). Fallback so the skill is
+   usable before a backend is deployed; the skill offers to set one up.
 
 > An earlier draft also tried a GitHub gist + githack render proxy. Dropped: it
 > binds links to an individual's GitHub account, depends on a third-party proxy
@@ -59,15 +60,21 @@ backend.
   enforces the password if one was set.
 - `GET /` — usage page.
 
-## Two security axes (don't conflate)
+## Three security axes (don't conflate)
 
-They gate different things; either can be on independently:
+They gate different things; each can be on independently:
 
 - **`UPLOAD_TOKEN` — who can *publish*.** Bearer gate on `POST /up`. Off by
   default (zero-setup); flip on to stop abuse when the instance is public.
 - **per-link `password` — who can *read* a page.** Set at upload; stored as a
   salted SHA-256 in object metadata; enforced on GET via HTTP Basic (or `?k=`).
   Protected pages are `Cache-Control: private, no-store`.
+- **per-artifact `deleteToken` — who can *take down* a page.** Minted on every
+  upload, returned to the publisher once, and stored as a salted SHA-256
+  (`delsalt`/`delhash`) alongside any password hash. Presented as a bearer on
+  `DELETE /:key`. `UPLOAD_TOKEN`, if set, is an operator override that can take
+  down any artifact. Delete defaults to closed (a token is always required),
+  because it is destructive — unlike upload, which defaults open.
 
 ## Read trust model
 
@@ -85,17 +92,16 @@ for "share with specific people". Documented in the README caveats.
 
 ## Out of scope (YAGNI for v1)
 
-- Custom slugs / vanity URLs, edit/delete, dashboards, accounts.
+- Custom slugs / vanity URLs, in-place edit, dashboards, accounts.
+  (Per-artifact **delete** is now in scope — see the third security axis above.)
 - Multi-file bundles (publish each file; stage an `index.html` if needed).
 - Analytics, auth beyond the optional token.
 
 ## Status
 
 - Skill + worker implemented and verified end-to-end (local + live).
-- Backend **deployed** at `https://pubifact.domuk-k.workers.dev` (reference
-  instance; the publish script defaults to it).
-- Skill installed locally (`~/.claude/skills/pubifact`) and laid out as
-  `skills/pubifact/SKILL.md` for `npx skills add <owner>/<repo>` discovery.
-- Remaining for public release: push to a public GitHub repo, and decide whether
-  the reference endpoint stays a shared free service (then add `UPLOAD_TOKEN` /
-  rate-limits) or installers deploy their own.
+- Skill installable via `npx skills add domuk-k/pubifact` and laid out as
+  `skills/pubifact/SKILL.md`.
+- Onboarding: lazy bootstrap (first publish via tmpfiles fallback, then offer to
+  deploy your own permanent instance via `init.sh`).
+- Remaining for public release: push to a public GitHub repo.

@@ -1,12 +1,15 @@
 # pubifact
 
+[![CI](https://github.com/domuk-k/pubifact/actions/workflows/ci.yml/badge.svg)](https://github.com/domuk-k/pubifact/actions/workflows/ci.yml)
+[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Turn a static HTML or Markdown file into a shareable URL with one command — for
-any AI coding agent (Claude Code, OpenCode, Codex, …). Zero account setup for the
-end user. Markdown is rendered to a clean HTML page.
+any AI coding agent (Claude Code, OpenCode, Codex, …). Markdown is rendered to
+a clean HTML page.
 
 ```
-"publish foo.html"            →  https://pubifact.<you>.workers.dev/x7qk2abc.html
-"publish notes.md"            →  rendered to HTML at the same kind of URL
+"publish foo.html"             →  https://pubifact.<you>.workers.dev/x7qk2abc.html
+"publish notes.md"             →  rendered to HTML at the same kind of URL
 "publish secret.md --password" →  same, but viewers must enter the password
 ```
 
@@ -14,7 +17,7 @@ Two pieces:
 
 | Piece | What | Where |
 |-------|------|-------|
-| **skill** | The thin client an agent runs (`publish.sh` + `SKILL.md`). Posts to the hosted endpoint, falls back to tmpfiles. | [`skills/pubifact/`](skills/pubifact/) |
+| **skill** | The thin client an agent runs (`publish.sh` + `SKILL.md`). Reads config, falls back to a temporary link. | [`skills/pubifact/`](skills/pubifact/) |
 | **worker** | A free `POST file → URL` service: Cloudflare Worker + R2, renders Markdown. | [`worker/`](worker/) |
 
 See [`DESIGN.md`](DESIGN.md) for the why.
@@ -25,45 +28,77 @@ Install it for your agent (Claude Code example — personal skills apply to ever
 project):
 
 ```bash
+npx skills add domuk-k/pubifact
+```
+
+Then ask your agent to "publish this" or "share this page". That's it.
+
+**How the first publish works — lazy bootstrap.** The skill does not require a
+backend to be configured up front. On the first publish it uploads via a
+temporary public link (~1 hour) so you see it work immediately, then offers to
+set up your own permanent free instance. You can accept then or skip and do it
+later.
+
+Alternatively, install by hand with a symlink:
+
+```bash
 ln -s "$PWD/skills/pubifact" ~/.claude/skills/pubifact
 ```
 
-The script already defaults to a reference instance, so it works out of the box.
-To point at **your own** backend instead, set:
+## Set up your own backend (free, permanent)
+
+One-time, ~3 minutes. Needs a free Cloudflare account. The skill's `init.sh`
+walks you through it:
+
+```bash
+bash ~/.claude/skills/pubifact/init.sh setup
+```
+
+Or click the button below (no CLI needed):
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/domuk-k/pubifact/tree/main/worker)
+
+<!-- TODO: verify button resolves worker/ subdir + R2 auto-provision after repo is public -->
+
+After either path, add your endpoint and token to the config file:
+
+```json
+{
+  "endpoint": "https://pubifact.<account>.workers.dev",
+  "token": "<your-upload-token>"
+}
+```
+
+Default location: `~/.config/pubifact/config.json` (written automatically by
+`init.sh`; the `token` key is only needed if you set `UPLOAD_TOKEN` on the
+worker).
+
+Environment variables override the config file (advanced / CI use):
 
 ```bash
 export PUBIFACT_ENDPOINT=https://pubifact.<account>.workers.dev
+export PUBIFACT_TOKEN=<your-upload-token>
 ```
 
-Then just ask your agent to "publish this", or run it directly:
+## What init.sh does, step by step
 
-```bash
-bash skills/pubifact/publish.sh page.html               # or notes.md
-bash skills/pubifact/publish.sh secret.md --password X   # private: prompts to view
-```
-
-If the endpoint is unreachable (and no password was given) it falls back to
-tmpfiles.org with a temporary link, so the skill is still usable.
-
-## Run the backend (free)
-
-One-time, ~3 minutes. Needs a free Cloudflare account.
+If you prefer to do it by hand:
 
 ```bash
 cd worker
 npm install
 npx wrangler login                         # opens browser, authorize
-npx wrangler r2 bucket create pubifact  # create the storage bucket
-npx wrangler deploy                         # deploy the Worker
+npx wrangler r2 bucket create pubifact     # create the storage bucket
+npx wrangler deploy                        # deploy the Worker — prints your URL
 ```
 
-`wrangler deploy` prints your URL: `https://pubifact.<account>.workers.dev`.
-Put that in `PUBIFACT_ENDPOINT` and you're done.
+Recommended hardening:
 
-Optional hardening (see `worker/wrangler.jsonc`):
+```bash
+npx wrangler secret put UPLOAD_TOKEN       # require a bearer token on uploads
+```
 
-- `npx wrangler secret put UPLOAD_TOKEN` — require a bearer token on uploads.
-- R2 lifecycle rule — auto-expire old pages.
+Then write `~/.config/pubifact/config.json` with your endpoint and token.
 
 ### Cost
 
@@ -74,9 +109,10 @@ Cloudflare free tier covers small usage at ~$0: Workers 100k requests/day, R2
 
 | Method & path | Purpose |
 |---------------|---------|
-| `POST /up` | Publish. Body: multipart `file` (preferred) or raw bytes. Returns the URL as text, or JSON if `Accept: application/json`. |
+| `POST /up` | Publish. Body: multipart `file` (preferred) or raw bytes. Returns two text lines — the URL, then a one-time **delete token** — or JSON (`url`, `deleteToken`) if `Accept: application/json`. |
 | `GET /:key` | Serve the page as `text/html`. 404 if unknown. |
 | `HEAD /:key` | Headers only (for link unfurlers). |
+| `DELETE /:key` | Take the page down. `Authorization: Bearer <delete-token>` (or the operator's `UPLOAD_TOKEN` as master key). |
 
 `POST /up` fields / params:
 
@@ -89,19 +125,36 @@ Cloudflare free tier covers small usage at ~$0: Workers 100k requests/day, R2
 ```bash
 curl -F file=@page.html https://<your>.workers.dev/up
 curl -F file=@notes.md -F password=hunter2 https://<your>.workers.dev/up
+
+# take it down later (token = line 2 of the publish response)
+curl -X DELETE -H "Authorization: Bearer <delete-token>" https://<your>.workers.dev/x7qk2abc.html
+# or from the skill:
+bash skills/pubifact/publish.sh --down <url> --token <delete-token>
 ```
+
+The delete token is shown **once**, at publish time. A page published before
+this feature existed can only be removed with the operator's `UPLOAD_TOKEN`.
 
 ## Caveats
 
 - Pages are hosted on a **public host**; without `--password` anyone with the
   link can open it and its JS runs. Use `--password` for private content.
 - `--password` gates *reading* (good for "share with specific people"). It is
-  **not** a fit for NDA/regulated data: content still lives in your R2 (a
-  third-party host) and the gate is only as strong as the password. Keep
-  contractually-restricted material in sanctioned infra.
+  **not** a fit for NDA/regulated data: content still lives in your R2, and the
+  gate is only as strong as the password. Keep contractually-restricted material
+  in sanctioned infra.
 - An open upload endpoint can be abused; flip on `UPLOAD_TOKEN`, the 5 MB cap,
   or Cloudflare rate-limiting if needed.
 - Artifacts must be self-contained — inline assets, no relative file refs.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the trust model and how to report
+vulnerabilities.
 
 ## License
 
