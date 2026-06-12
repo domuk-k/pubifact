@@ -27,6 +27,11 @@ export function randomHex(n: number): string {
   return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
 }
 
+// Salted SHA-256, deliberately NOT a slow KDF: the hash lives in R2
+// customMetadata next to the very object it gates — anyone who can read the
+// metadata can read the content, so offline-cracking resistance buys nothing.
+// A slow KDF would also blow the Workers free-tier CPU budget on every GET.
+// This is a share-secret for a link, not an account credential.
 export async function hashPw(pw: string, saltHex: string): Promise<string> {
   const data = new TextEncoder().encode(`${saltHex}:${pw}`)
   const digest = await crypto.subtle.digest('SHA-256', data)
