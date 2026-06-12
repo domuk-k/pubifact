@@ -10,8 +10,6 @@ Older versions are not patched.
 Use [GitHub's private vulnerability reporting](https://github.com/domuk-k/pubifact/security/advisories/new)
 to report confidentially.
 
-Email fallback: <!-- TODO: add maintainer email before going public -->
-
 Please include: what you found, steps to reproduce, and your assessment of
 impact. You'll get an acknowledgement within a few days.
 
