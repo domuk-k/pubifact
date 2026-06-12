@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Stub npx for init.sh bats tests.
+#
+# Recognizes `npx -y wrangler@4 <subcommand> …` and fakes wrangler output,
+# driven by env vars (defaults in parens):
+#   WHOAMI_MODE (ok)   ok | not-logged-in
+#   LOGIN_MODE  (ok)   ok | fail
+#   BUCKET_MODE (ok)   ok | exists | no-r2 | fail
+#   DEPLOY_MODE (ok)   colon-separated list consumed per deploy call, last
+#                      entry repeats: ok | need-subdomain | multi-account | fail
+#   SECRET_MODE (ok)   ok | fail
+#   NPX_LOG            file to append "<pwd> :: <argv>" per invocation
+#   NPX_STATE_DIR      where the deploy call counter lives (default $TMPDIR)
+set -euo pipefail
+
+if [ -n "${NPX_LOG:-}" ]; then
+  printf '%s :: %s\n' "$PWD" "$*" >>"$NPX_LOG"
+fi
+
+# Strip `-y` and the wrangler package spec to find the wrangler subcommand.
+sub=''
+for a in "$@"; do
+  case "$a" in
+    -y | wrangler | wrangler@*) ;;
+    *)
+      sub="$a"
+      break
+      ;;
+  esac
+done
+
+case "$sub" in
+  whoami)
+    case "${WHOAMI_MODE:-ok}" in
+      ok)
+        printf 'Getting User settings...\n'
+        printf 'You are logged in with an OAuth Token, associated with the email test@example.com.\n'
+        printf 'Account Name: Test Account | Account ID: abc123abc123\n'
+        exit 0
+        ;;
+      not-logged-in)
+        printf 'Getting User settings...\n'
+        # shellcheck disable=SC2016  # literal backticks, faithful to wrangler output
+        printf 'You are not authenticated. Please run `wrangler login`.\n' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  login)
+    case "${LOGIN_MODE:-ok}" in
+      ok)
+        printf 'Attempting to login via OAuth...\n'
+        printf 'Opening a link in your default browser: https://dash.cloudflare.com/oauth2/auth?response_type=code&client_id=stub\n'
+        printf 'Successfully logged in.\n'
+        exit 0
+        ;;
+      fail)
+        printf 'ERROR: failed to login\n' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  r2)
+    # r2 bucket create <name>
+    case "${BUCKET_MODE:-ok}" in
+      ok)
+        printf "Creating bucket 'pubifact'...\n"
+        printf "Created bucket 'pubifact'.\n"
+        exit 0
+        ;;
+      exists)
+        printf 'X [ERROR] The bucket you tried to create already exists. [code: 10004]\n' >&2
+        exit 1
+        ;;
+      no-r2)
+        printf 'X [ERROR] Please enable R2 through the Cloudflare Dashboard. [code: 10042]\n' >&2
+        exit 1
+        ;;
+      fail)
+        printf 'X [ERROR] something broke creating the bucket\n' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  deploy)
+    count_file="${NPX_STATE_DIR:-${TMPDIR:-/tmp}}/pubifact-stub-deploy-count"
+    count=0
+    if [ -f "$count_file" ]; then
+      count="$(cat "$count_file")"
+    fi
+    printf '%s\n' "$((count + 1))" >"$count_file"
+
+    IFS=':' read -r -a modes <<<"${DEPLOY_MODE:-ok}"
+    idx="$count"
+    if [ "$idx" -ge "${#modes[@]}" ]; then
+      idx=$((${#modes[@]} - 1))
+    fi
+    mode="${modes[$idx]}"
+
+    case "$mode" in
+      ok)
+        printf 'Total Upload: 12.34 KiB / gzip: 4.56 KiB\n'
+        printf 'Uploaded pubifact (1.23 sec)\n'
+        printf 'Deployed pubifact triggers (0.45 sec)\n'
+        printf '  https://pubifact.test-account.workers.dev\n'
+        printf 'Current Version ID: 00000000-0000-0000-0000-000000000000\n'
+        exit 0
+        ;;
+      need-subdomain)
+        printf 'X [ERROR] You need to register a workers.dev subdomain before deploying to workers.dev\n' >&2
+        exit 1
+        ;;
+      multi-account)
+        cat >&2 <<'EOF'
+X [ERROR] More than one account available but unable to select one in non-interactive mode.
+Please set the appropriate `account_id` in your Wrangler configuration file or assign it to the `CLOUDFLARE_ACCOUNT_ID` environment variable.
+Available accounts are (`<name>`: `<account_id>`):
+  `Personal`: `abc123abc123`
+  `Work`: `def456def456`
+EOF
+        exit 1
+        ;;
+      fail)
+        printf 'X [ERROR] deploy exploded\n' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  secret)
+    # secret put <NAME> — the secret value arrives on stdin; consume it so the
+    # writing side never sees a closed pipe.
+    cat >/dev/null
+    case "${SECRET_MODE:-ok}" in
+      ok)
+        printf 'Creating the secret for the Worker "pubifact"\n'
+        printf 'Success! Uploaded secret UPLOAD_TOKEN\n'
+        exit 0
+        ;;
+      fail)
+        printf 'X [ERROR] could not upload the secret\n' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+esac
+
+printf 'stub npx: unhandled invocation: %s\n' "$*" >&2
+exit 1
