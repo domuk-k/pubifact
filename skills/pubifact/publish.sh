@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # pubifact — turn a local .html or .md file into a shareable URL.
 #
-# Tiers (first that works wins):
-#   1. Your configured instance  — endpoint from config.json or $PUBIFACT_ENDPOINT.
-#      Persistent, renders Markdown server-side. No account needed on the reader side.
-#   2. tmpfiles.org              — no account, emergency fallback, expires ~1 hour.
+# Publishing needs a configured instance: an `endpoint` in
+# ~/.config/pubifact/config.json (written by init.sh) or $PUBIFACT_ENDPOINT.
+# With none configured, this script points you at init.sh to set up your own
+# free permanent instance in ~2 minutes. It deliberately does NOT fall back to
+# an anonymous public host — those reject HTML/Markdown unpredictably and leak
+# your content to a host you don't control.
 #
 # Usage:
 #   publish.sh <file>                      # .html or .md
@@ -13,17 +15,15 @@
 #
 # With --password (or $PUBIFACT_PASSWORD) the page is read-protected: viewers
 # get an HTTP Basic prompt (any username + the secret) or append ?k=<secret>.
-# A password forces the configured endpoint only — it never falls back to an
-# unprotected public host.
 #
 # On publish, a one-time delete token is printed to the logs (stderr). Keep it
 # to take the page down later with --down (or set $PUBIFACT_DELETE_TOKEN).
 #
 # Exit codes:
 #   0  success
-#   1  total failure (all methods failed)
+#   1  could not reach / publish to the configured instance
 #   2  usage error (bad arguments / file not found)
-#   3  password given but no endpoint configured
+#   3  no instance configured yet — run init.sh
 #   4  instance auth or size error (401/403/413 — check config)
 set -euo pipefail
 
@@ -72,6 +72,10 @@ done
 
 log() { printf '%s\n' "$*" >&2; }
 
+# Resolve the skill directory from the script's own real path (init.sh hints).
+# shellcheck disable=SC2155  # combined declare+assign: safe here, only used for messages
+SKILL_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
+
 # --- takedown mode: DELETE a published page ---
 if [ -n "$down_url" ]; then
   if [ -z "$delete_token" ]; then
@@ -111,87 +115,57 @@ fi
   exit 2
 }
 
-# Resolve the skill directory from the script's own real path (init.sh hints).
-# shellcheck disable=SC2155  # combined declare+assign: safe here, only used for messages
-SKILL_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
-
-# --- decision: password + no endpoint → fail immediately (never upload unprotected) ---
-if [ -n "$password" ] && [ -z "$ENDPOINT" ]; then
-  log "pubifact: password given but no endpoint configured — cannot fall back to an unprotected host"
-  log "pubifact: run ${SKILL_DIR}/init.sh to set up a free permanent instance first"
+# --- no instance configured → point at one-time setup (init-first) ---
+if [ -z "$ENDPOINT" ]; then
+  log "pubifact: no instance configured yet — nothing was uploaded."
+  log "pubifact: set up your own free permanent instance (~2 min): ${SKILL_DIR}/init.sh"
   exit 3
 fi
 
-# --- tier 1: configured instance ---
-if [ -n "$ENDPOINT" ]; then
-  curl_args=(-sS -w '\n%{http_code}' -F "file=@${file}")
-  [ -n "$password" ] && curl_args+=(-F "password=${password}")
-  [ -n "$TOKEN" ] && curl_args+=(-H "Authorization: Bearer ${TOKEN}")
+# --- publish to the configured instance ---
+curl_args=(-sS -w '\n%{http_code}' -F "file=@${file}")
+[ -n "$password" ] && curl_args+=(-F "password=${password}")
+[ -n "$TOKEN" ] && curl_args+=(-H "Authorization: Bearer ${TOKEN}")
 
-  # `|| true`: on connection failure curl still emits the -w "000" trailer but
-  # exits non-zero, which would kill the script under set -e before the
-  # fallback branch can run.
-  raw_response="$(curl "${curl_args[@]}" "${ENDPOINT%/}/up" || true)"
-  http_status="${raw_response##*$'\n'}"
-  body="${raw_response%$'\n'*}"
+# `|| true`: on connection failure curl still emits the -w "000" trailer but
+# exits non-zero, which would kill the script under set -e.
+raw_response="$(curl "${curl_args[@]}" "${ENDPOINT%/}/up" || true)"
+http_status="${raw_response##*$'\n'}"
+body="${raw_response%$'\n'*}"
 
-  case "$http_status" in
-    200)
-      # Response body is up to two lines: line 1 = URL, line 2 = delete token.
-      # stdout MUST stay URL-only (the capture contract); the token goes to stderr.
-      url="${body%%$'\n'*}"
-      pub_token=''
-      [ "$body" != "$url" ] && pub_token="${body#*$'\n'}"
-      pub_token="${pub_token%%$'\n'*}" # first line only — body may carry a trailing newline
-      if [ -n "$url" ]; then
-        printf '%s\n' "$url"
-        [ -n "$password" ] && log "(read-protected — share the password separately)"
-        if [ -n "$pub_token" ]; then
-          log "pubifact: take it down later with: publish.sh --down ${url} --token ${pub_token}"
-        fi
-        exit 0
+case "$http_status" in
+  200)
+    # Response body is up to two lines: line 1 = URL, line 2 = delete token.
+    # stdout MUST stay URL-only (the capture contract); the token goes to stderr.
+    url="${body%%$'\n'*}"
+    pub_token=''
+    [ "$body" != "$url" ] && pub_token="${body#*$'\n'}"
+    pub_token="${pub_token%%$'\n'*}" # first line only — body may carry a trailing newline
+    if [ -n "$url" ]; then
+      printf '%s\n' "$url"
+      [ -n "$password" ] && log "(read-protected — share the password separately)"
+      if [ -n "$pub_token" ]; then
+        log "pubifact: take it down later with: publish.sh --down ${url} --token ${pub_token}"
       fi
-      log "pubifact: endpoint returned 200 but empty body — falling back"
-      ;;
-    401 | 403)
-      log "pubifact: authentication error (HTTP $http_status) — check your token in $CONFIG"
-      exit 4
-      ;;
-    413)
-      log "pubifact: file too large (HTTP 413) — your instance rejected this upload"
-      exit 4
-      ;;
-    000)
-      log "pubifact: configured instance unreachable (curl error) — falling back to temporary host"
-      ;;
-    *)
-      log "pubifact: endpoint returned HTTP $http_status — falling back to temporary host"
-      ;;
-  esac
-
-  # password was set → we already exited 0, 4, or 3 above. A password never reaches here.
-fi
-
-# A password must never leak to an unprotected host — stop here (should not reach this
-# point due to the exit 3 check above, but guard defensively).
-if [ -n "$password" ]; then
-  log "pubifact: refusing to fall back to an unprotected host for a password-protected file"
-  exit 1
-fi
-
-# --- tier 2: tmpfiles.org (no account, ~1h expiry) — emergency fallback only ---
-raw_tmp="$(curl -sS -w '\n%{http_code}' -F "file=@${file}" https://tmpfiles.org/api/v1/upload || true)"
-tmpfiles_response="${raw_tmp%$'\n'*}"
-
-raw_url="$(printf '%s' "$tmpfiles_response" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
-if [ -n "$raw_url" ]; then
-  # /dl/ path serves the file directly (not the tmpfiles viewer page).
-  dl_url="${raw_url/tmpfiles.org\//tmpfiles.org/dl/}"
-  printf '%s\n' "$dl_url"
-  log "pubifact: published via temporary fallback — this link EXPIRES in ~1 hour"
-  log "pubifact: no instance configured. One-time setup gives you a permanent free instance: ${SKILL_DIR}/init.sh"
-  exit 0
-fi
-
-log "pubifact: all publish methods failed — check connectivity or configure an endpoint"
-exit 1
+      exit 0
+    fi
+    log "pubifact: instance returned 200 but an empty body — nothing to share"
+    exit 1
+    ;;
+  401 | 403)
+    log "pubifact: authentication error (HTTP $http_status) — check your token in $CONFIG"
+    exit 4
+    ;;
+  413)
+    log "pubifact: file too large (HTTP 413) — your instance rejected this upload"
+    exit 4
+    ;;
+  000)
+    log "pubifact: could not reach your instance at ${ENDPOINT} — is it deployed? (re-run ${SKILL_DIR}/init.sh to verify)"
+    exit 1
+    ;;
+  *)
+    log "pubifact: your instance returned HTTP $http_status"
+    exit 1
+    ;;
+esac

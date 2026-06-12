@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Stub curl for publish.sh bats tests.
+# Stub curl for publish.sh / init.sh bats tests.
 #
 # Behavior is driven by the $CURL_MODE environment variable:
-#   ok            — /up returns 200 + a fake URL; tmpfiles returns JSON with URL
-#   auth-fail     — /up returns 401
+#   ok            — /up returns 200 + a two-line body; GET / (reachability) 200
+#   auth-fail     — /up returns 401 (DELETE: wrong-token 401)
 #   size-fail     — /up returns 413
-#   endpoint-down — /up simulates network error (000); tmpfiles succeeds
-#   all-down      — all calls fail (exit non-zero, status 000 for -w paths)
+#   gone          — DELETE returns 404 (unknown / already-removed URL)
+#   endpoint-down — /up + reachability simulate a network error (000, exit 7)
+#   all-down      — every call fails (000, exit 7)
 #
 # Invocations are recorded to $CURL_LOG (one argv line per call, space-separated).
 
@@ -77,14 +78,13 @@ emit() {
 
 MODE="${CURL_MODE:-ok}"
 
-# Determine path type: /up endpoint vs tmpfiles
+# Path type: a publish call (POST /up) vs a reachability probe (GET /).
 is_up=false
 case "$url" in
-  */up) is_up=true ;;
-  */up/*) is_up=true ;;
+  */up | */up/*) is_up=true ;;
 esac
 
-# DELETE (takedown) calls are independent of the up/tmpfiles split.
+# DELETE (takedown) calls.
 if $is_delete; then
   case "$MODE" in
     ok) emit "deleted" "200" ;;
@@ -102,42 +102,30 @@ if $is_delete; then
   exit 0
 fi
 
-case "$MODE" in
-  ok)
-    if $is_up; then
-      # Two-line body: URL then the per-artifact delete token (real worker shape).
-      emit 'https://example-instance.workers.dev/abc123
-dtok0123456789abcdef0123456789ab' "200"
-    else
-      # tmpfiles.org path
-      emit '{"status":"ok","data":{"url":"https://tmpfiles.org/123/f.html"}}' "200"
-    fi
-    ;;
-  auth-fail)
-    if $is_up; then
-      emit "" "401"
-    else
-      emit '{"status":"ok","data":{"url":"https://tmpfiles.org/123/f.html"}}' "200"
-    fi
-    ;;
-  size-fail)
-    if $is_up; then
-      emit "" "413"
-    else
-      emit '{"status":"ok","data":{"url":"https://tmpfiles.org/123/f.html"}}' "200"
-    fi
-    ;;
-  endpoint-down)
-    if $is_up; then
-      # Faithful to real curl on connection failure: the -w "000" trailer is
-      # still written, but curl exits 7 (publish.sh must guard with `|| true`).
+# Reachability probe (GET /, used by init.sh check): up unless the host is down.
+if ! $is_up; then
+  case "$MODE" in
+    endpoint-down | all-down)
       emit "" "000"
       exit 7
-    else
-      emit '{"status":"ok","data":{"url":"https://tmpfiles.org/123/f.html"}}' "200"
-    fi
+      ;;
+    *) emit "ok" "200" ;;
+  esac
+  exit 0
+fi
+
+# Publish call (POST /up).
+case "$MODE" in
+  ok)
+    # Two-line body: URL then the per-artifact delete token (real worker shape).
+    emit 'https://example-instance.workers.dev/abc123
+dtok0123456789abcdef0123456789ab' "200"
     ;;
-  all-down)
+  auth-fail) emit "" "401" ;;
+  size-fail) emit "" "413" ;;
+  endpoint-down | all-down)
+    # Faithful to real curl on connection failure: the -w "000" trailer is
+    # still written, but curl exits 7 (callers must guard with `|| true`).
     emit "" "000"
     exit 7
     ;;

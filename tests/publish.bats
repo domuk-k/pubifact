@@ -78,43 +78,32 @@ setup() {
 }
 
 # ---------------------------------------------------------------------------
-# password + no endpoint → exit 3, curl never invoked
+# no instance configured → init-first: exit 3, point at init.sh, upload nothing
 # ---------------------------------------------------------------------------
 
-@test "password with no endpoint exits 3 without invoking curl" {
-  # No config, no env var.
-  run bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html" --password "s3cr3t"
+@test "no endpoint no password exits 3 with init.sh hint, uploads nothing" {
+  # No config, no endpoint env var.
+  run --separate-stderr bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
   [ "$status" -eq 3 ]
-  # CURL_LOG must not exist (curl was never called).
+  # No URL printed — nothing was uploaded anywhere.
+  [ -z "$output" ]
+  # stderr points the user at one-time setup, never a temporary host.
+  [[ "$stderr" == *"no instance configured"* ]]
+  [[ "$stderr" == *"init.sh"* ]]
+  # curl was never invoked — we don't leak to any anonymous host.
   [ ! -f "$CURL_LOG" ]
 }
 
-# ---------------------------------------------------------------------------
-# no endpoint, no password → tmpfiles fallback + bootstrap hint
-# ---------------------------------------------------------------------------
+@test "no endpoint WITH password also exits 3 (no special case)" {
+  run bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html" --password "s3cr3t"
+  [ "$status" -eq 3 ]
+  [ ! -f "$CURL_LOG" ]
+}
 
-@test "no endpoint no password uses tmpfiles and prints bootstrap hint" {
-  # No config, no endpoint env var.
+@test "no endpoint never contacts a third-party host (no tmpfiles)" {
   run --separate-stderr bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
-  [ "$status" -eq 0 ]
-  # stdout must be the /dl/ rewritten URL (only).
-  [ "$output" = "https://tmpfiles.org/dl/123/f.html" ]
-  # stderr must contain the bootstrap hint.
-  [[ "$stderr" == *"no instance configured"* ]]
-}
-
-@test "tmpfiles fallback rewrites URL to /dl/ path" {
-  run bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"/dl/"* ]]
-  # Must NOT contain tmpfiles.org/ without /dl/
-  [[ "$output" != *"tmpfiles.org/123"* ]]
-}
-
-@test "tmpfiles fallback stderr contains EXPIRES hint" {
-  run bash -c "bash '$PUBLISH_SH' '$BATS_TEST_TMPDIR/page.html' 2>&1 >/dev/null"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"EXPIRES"* ]]
+  [[ "$stderr" != *"tmpfiles"* ]]
+  [[ "$stderr" != *"EXPIRES"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -146,7 +135,7 @@ setup() {
 }
 
 # ---------------------------------------------------------------------------
-# endpoint 401 → exit 4, no tmpfiles call
+# endpoint errors → exit 4 (auth/size), no fallback anywhere
 # ---------------------------------------------------------------------------
 
 @test "endpoint 401 exits 4" {
@@ -154,17 +143,6 @@ setup() {
   export CURL_MODE="auth-fail"
   run bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
   [ "$status" -eq 4 ]
-}
-
-@test "endpoint 401 does not fall back to tmpfiles" {
-  export PUBIFACT_ENDPOINT="https://my.instance.workers.dev"
-  export CURL_MODE="auth-fail"
-  run bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
-  [ "$status" -eq 4 ]
-  # curl log should contain exactly one invocation (the /up call), not a tmpfiles call.
-  [ -f "$CURL_LOG" ]
-  run grep "tmpfiles" "$CURL_LOG"
-  [ "$status" -ne 0 ]
 }
 
 @test "endpoint 413 exits 4" {
@@ -175,23 +153,17 @@ setup() {
 }
 
 # ---------------------------------------------------------------------------
-# endpoint network fail (000) without password → falls back to tmpfiles
+# endpoint network failure (000) → exit 1, no fallback (init-first)
 # ---------------------------------------------------------------------------
 
-@test "endpoint network failure without password falls back to tmpfiles" {
-  export PUBIFACT_ENDPOINT="https://my.instance.workers.dev"
-  export CURL_MODE="endpoint-down"
-  run bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"/dl/"* ]]
-}
-
-@test "endpoint network failure URL is rewritten to /dl/" {
+@test "endpoint network failure exits 1 (no fallback host)" {
   export PUBIFACT_ENDPOINT="https://my.instance.workers.dev"
   export CURL_MODE="endpoint-down"
   run --separate-stderr bash "$PUBLISH_SH" "$BATS_TEST_TMPDIR/page.html"
-  [ "$status" -eq 0 ]
-  [ "$output" = "https://tmpfiles.org/dl/123/f.html" ]
+  [ "$status" -eq 1 ]
+  # No temporary link, no third-party host.
+  [ -z "$output" ]
+  [[ "$stderr" != *"tmpfiles"* ]]
 }
 
 # ---------------------------------------------------------------------------
