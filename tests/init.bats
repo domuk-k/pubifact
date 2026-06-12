@@ -181,8 +181,15 @@ write_config() {
   local tok
   tok="$(json_get "$CFG" token)"
   [[ "$tok" =~ ^[0-9a-f]{32}$ ]]
+  # stat is not portable: BSD (macOS) uses -f '%Lp', GNU (Linux) uses -c '%a'.
+  # On GNU, `-f` means --file-system (not a format), so the BSD-first `|| `
+  # chain would print filesystem info AND the fallback. Branch on uname instead.
   local perms
-  perms="$(stat -f '%Lp' "$CFG" 2>/dev/null || stat -c '%a' "$CFG")"
+  if [ "$(uname)" = "Darwin" ]; then
+    perms="$(stat -f '%Lp' "$CFG")"
+  else
+    perms="$(stat -c '%a' "$CFG")"
+  fi
   [ "$perms" = "600" ]
 }
 
