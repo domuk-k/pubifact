@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Stub curl for publish.sh bats tests.
+#
+# Behavior is driven by the $CURL_MODE environment variable:
+#   ok            — /up returns 200 + a fake URL; tmpfiles returns JSON with URL
+#   auth-fail     — /up returns 401
+#   size-fail     — /up returns 413
+#   endpoint-down — /up simulates network error (000); tmpfiles succeeds
+#   all-down      — all calls fail (exit non-zero, status 000 for -w paths)
+#
+# Invocations are recorded to $CURL_LOG (one argv line per call, space-separated).
+
+# Record this invocation so tests can assert on headers / URLs.
+if [ -n "${CURL_LOG:-}" ]; then
+  printf '%s\n' "$*" >>"$CURL_LOG"
+fi
+
+# Parse args: find the last positional argument (the URL).
+# We scan all args, track the previous arg to handle -H "value" style,
+# and collect everything that's not a flag or flag-value as the URL.
+has_w=false
+url=''
+prev=''
+for arg in "$@"; do
+  case "$prev" in
+    # These flags consume the next argument as their value — skip it as URL
+    -w | --write-out | -H | --header | -F | --form | -d | --data | \
+      -o | --output | -u | --user | --connect-timeout | --max-time)
+      prev="$arg"
+      continue
+      ;;
+  esac
+  case "$arg" in
+    -w | --write-out)
+      has_w=true
+      prev="$arg"
+      ;;
+    -H | --header | -F | --form | -d | --data | -o | --output | \
+      -u | --user | --connect-timeout | --max-time)
+      prev="$arg"
+      ;;
+    -*)
+      # Single-char flags or combined flags (e.g. -sS, -fsS) — no value follows
+      prev="$arg"
+      ;;
+    *)
+      # Positional: this is the URL (last one wins)
+      url="$arg"
+      prev="$arg"
+      ;;
+  esac
+done
+
+emit() {
+  # $1 = body, $2 = http_status
+  if $has_w; then
+    printf '%s\n%s' "$1" "$2"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+MODE="${CURL_MODE:-ok}"
+
+# Determine path type: /up endpoint vs tmpfiles
+is_up=false
+case "$url" in
+  */up) is_up=true ;;
+  */up/*) is_up=true ;;
+esac
+
+case "$MODE" in
+  ok)
+    if $is_up; then
+      emit "https://example-instance.workers.dev/abc123" "200"
+    else
+      # tmpfiles.org path
+      emit '{"status":"ok","data":{"url":"https://tmpfiles.org/123/f.html"}}' "200"
+    fi
+    ;;
+  auth-fail)
+    if $is_up; then
+      emit "" "401"
+    else
+      emit '{"status":"ok","data":{"url":"https://tmpfiles.org/123/f.html"}}' "200"
+    fi
+    ;;
+  size-fail)
+    if $is_up; then
+      emit "" "413"
+    else
+      emit '{"status":"ok","data":{"url":"https://tmpfiles.org/123/f.html"}}' "200"
+    fi
+    ;;
+  endpoint-down)
+    if $is_up; then
+      # Faithful to real curl on connection failure: the -w "000" trailer is
+      # still written, but curl exits 7 (publish.sh must guard with `|| true`).
+      emit "" "000"
+      exit 7
+    else
+      emit '{"status":"ok","data":{"url":"https://tmpfiles.org/123/f.html"}}' "200"
+    fi
+    ;;
+  all-down)
+    emit "" "000"
+    exit 7
+    ;;
+  *)
+    printf 'stub curl: unknown CURL_MODE=%s\n' "$MODE" >&2
+    exit 1
+    ;;
+esac

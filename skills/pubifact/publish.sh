@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # pubifact — turn a local .html or .md file into a shareable URL.
 #
-# Tiers (first that works wins, so it works for everyone with zero setup):
-#   1. Hosted endpoint — $PUBIFACT_ENDPOINT (our Worker). No account, persistent.
-#   2. tmpfiles.org    — no account, emergency fallback, link expires in ~1 hour.
+# Tiers (first that works wins):
+#   1. Your configured instance  — endpoint from config.json or $PUBIFACT_ENDPOINT.
+#      Persistent, renders Markdown server-side. No account needed on the reader side.
+#   2. tmpfiles.org              — no account, emergency fallback, expires ~1 hour.
 #
 # Usage:
 #   publish.sh <file>                      # .html or .md
@@ -11,14 +12,31 @@
 #
 # With --password (or $PUBIFACT_PASSWORD) the page is read-protected: viewers
 # get an HTTP Basic prompt (any username + the secret) or append ?k=<secret>.
-# A password forces the hosted endpoint only — it never falls back to an
+# A password forces the configured endpoint only — it never falls back to an
 # unprotected public host.
+#
+# Exit codes:
+#   0  success
+#   1  total failure (all methods failed)
+#   2  usage error (bad arguments / file not found)
+#   3  password given but no endpoint configured
+#   4  instance auth or size error (401/403/413 — check config)
 set -euo pipefail
 
-# Defaults to the reference instance so it works with no setup.
-# Self-hosting? Override: export PUBIFACT_ENDPOINT=https://pubifact.<you>.workers.dev
-ENDPOINT="${PUBIFACT_ENDPOINT:-https://pubifact.domuk-k.workers.dev}"
+# --- config (env var > config file > nothing) ---
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/pubifact/config.json"
+json_get() { sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null | head -n1; }
 
+ENDPOINT="${PUBIFACT_ENDPOINT:-}"
+TOKEN="${PUBIFACT_TOKEN:-}"
+if [ -z "$ENDPOINT" ] && [ -f "$CONFIG" ]; then
+  ENDPOINT="$(json_get "$CONFIG" endpoint)"
+fi
+if [ -z "$TOKEN" ] && [ -f "$CONFIG" ]; then
+  TOKEN="$(json_get "$CONFIG" token)"
+fi
+
+# --- arg parsing ---
 file=''
 password="${PUBIFACT_PASSWORD:-}"
 while [ "$#" -gt 0 ]; do
@@ -28,7 +46,7 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     -h | --help)
-      echo "usage: publish.sh <file> [--password <secret>]" >&2
+      printf 'usage: publish.sh <file> [--password <secret>]\n' >&2
       exit 0
       ;;
     *)
@@ -39,40 +57,85 @@ while [ "$#" -gt 0 ]; do
 done
 
 { [ -n "$file" ] && [ -f "$file" ]; } || {
-  echo "usage: publish.sh <file> [--password <secret>]" >&2
+  printf 'usage: publish.sh <file> [--password <secret>]\n' >&2
   exit 2
 }
 
 log() { printf '%s\n' "$*" >&2; }
 
-# --- tier 1: hosted endpoint (zero setup) ---
-if [ -n "$ENDPOINT" ]; then
-  args=(-F "file=@${file}")
-  [ -n "$password" ] && args+=(-F "password=${password}")
-  if url=$(curl -fsS "${args[@]}" "${ENDPOINT%/}/up" 2>/dev/null) && [ -n "$url" ]; then
-    printf '%s\n' "$url"
-    [ -n "$password" ] && log "(read-protected — share the password separately)"
-    exit 0
-  fi
-  log "hosted endpoint unavailable…"
+# Resolve the skill directory from the script's own real path (init.sh hints).
+# shellcheck disable=SC2155  # combined declare+assign: safe here, only used for messages
+SKILL_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
+
+# --- decision: password + no endpoint → fail immediately (never upload unprotected) ---
+if [ -n "$password" ] && [ -z "$ENDPOINT" ]; then
+  log "pubifact: password given but no endpoint configured — cannot fall back to an unprotected host"
+  log "pubifact: run ${SKILL_DIR}/init.sh to set up a free permanent instance first"
+  exit 3
 fi
 
-# A password must never leak to an unprotected host — stop here.
+# --- tier 1: configured instance ---
+if [ -n "$ENDPOINT" ]; then
+  curl_args=(-sS -w '\n%{http_code}' -F "file=@${file}")
+  [ -n "$password" ] && curl_args+=(-F "password=${password}")
+  [ -n "$TOKEN" ] && curl_args+=(-H "Authorization: Bearer ${TOKEN}")
+
+  # `|| true`: on connection failure curl still emits the -w "000" trailer but
+  # exits non-zero, which would kill the script under set -e before the
+  # fallback branch can run.
+  raw_response="$(curl "${curl_args[@]}" "${ENDPOINT%/}/up" || true)"
+  http_status="${raw_response##*$'\n'}"
+  body="${raw_response%$'\n'*}"
+
+  case "$http_status" in
+    200)
+      url="$body"
+      if [ -n "$url" ]; then
+        printf '%s\n' "$url"
+        [ -n "$password" ] && log "(read-protected — share the password separately)"
+        exit 0
+      fi
+      log "pubifact: endpoint returned 200 but empty body — falling back"
+      ;;
+    401 | 403)
+      log "pubifact: authentication error (HTTP $http_status) — check your token in $CONFIG"
+      exit 4
+      ;;
+    413)
+      log "pubifact: file too large (HTTP 413) — your instance rejected this upload"
+      exit 4
+      ;;
+    000)
+      log "pubifact: configured instance unreachable (curl error) — falling back to temporary host"
+      ;;
+    *)
+      log "pubifact: endpoint returned HTTP $http_status — falling back to temporary host"
+      ;;
+  esac
+
+  # password was set → we already exited 0, 4, or 3 above. A password never reaches here.
+fi
+
+# A password must never leak to an unprotected host — stop here (should not reach this
+# point due to the exit 3 check above, but guard defensively).
 if [ -n "$password" ]; then
-  log "refusing to fall back to an unprotected host for a password-protected file"
+  log "pubifact: refusing to fall back to an unprotected host for a password-protected file"
   exit 1
 fi
 
 # --- tier 2: tmpfiles.org (no account, ~1h expiry) — emergency fallback only ---
-if resp=$(curl -fsS -F "file=@${file}" https://tmpfiles.org/api/v1/upload 2>/dev/null); then
-  raw="$(printf '%s' "$resp" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
-  if [ -n "$raw" ]; then
-    # /dl/ path serves the file directly.
-    printf '%s\n' "${raw/tmpfiles.org\//tmpfiles.org/dl/}"
-    log "(temporary link — expires in ~1 hour)"
-    exit 0
-  fi
+raw_tmp="$(curl -sS -w '\n%{http_code}' -F "file=@${file}" https://tmpfiles.org/api/v1/upload || true)"
+tmpfiles_response="${raw_tmp%$'\n'*}"
+
+raw_url="$(printf '%s' "$tmpfiles_response" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
+if [ -n "$raw_url" ]; then
+  # /dl/ path serves the file directly (not the tmpfiles viewer page).
+  dl_url="${raw_url/tmpfiles.org\//tmpfiles.org/dl/}"
+  printf '%s\n' "$dl_url"
+  log "pubifact: published via temporary fallback — this link EXPIRES in ~1 hour"
+  log "pubifact: no instance configured. One-time setup gives you a permanent free instance: ${SKILL_DIR}/init.sh"
+  exit 0
 fi
 
-log "all publish methods failed — check connectivity or set PUBIFACT_ENDPOINT"
+log "pubifact: all publish methods failed — check connectivity or configure an endpoint"
 exit 1
