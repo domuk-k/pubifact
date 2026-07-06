@@ -2,158 +2,122 @@
 
 [![CI](https://github.com/domuk-k/pubifact/actions/workflows/ci.yml/badge.svg)](https://github.com/domuk-k/pubifact/actions/workflows/ci.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 
-Turn a static HTML or Markdown file into a shareable URL with one command — for
-any AI coding agent (Claude Code, OpenCode, Codex, …). Markdown is rendered to
-a clean HTML page.
+> **Agent-native artifact hosting** — publish HTML or Markdown to a shareable URL on your own Cloudflare Worker. One command from Claude Code, Codex, or any agent with the skill installed.
 
 ```
-"publish foo.html"             →  https://pubifact.<you>.workers.dev/x7qk2abc.html
-"publish notes.md"             →  rendered to HTML at the same kind of URL
-"publish secret.md --password" →  same, but viewers must enter the password
+"publish report.html"  →  https://pubifact.<you>.workers.dev/x7qk2abc.html
+"publish notes.md"     →  rendered HTML at the same URL shape
+"publish draft.md --password secret"  →  password-gated page
 ```
 
-Two pieces:
+Your content never touches a third-party host — only **your** R2 bucket and Worker.
 
-| Piece | What | Where |
-|-------|------|-------|
-| **skill** | The thin client an agent runs (`publish.sh` + `SKILL.md`). Reads config, prompts you to run `init.sh` if none is set. | [`skills/pubifact/`](skills/pubifact/) |
-| **worker** | A free `POST file → URL` service: Cloudflare Worker + R2, renders Markdown. | [`worker/`](worker/) |
+---
 
-See [`DESIGN.md`](DESIGN.md) for the why.
+## Two pieces
 
-## Use the skill
+| Piece | Role |
+|-------|------|
+| [**skill**](skills/pubifact/) | Thin client: `publish.sh` + `SKILL.md`. Agents call it on "publish this". |
+| [**worker**](worker/) | `POST file → URL` API on Cloudflare Workers + R2. Renders Markdown → HTML. |
 
-Install it for your agent (Claude Code example — personal skills apply to every
-project):
+Design rationale: [`DESIGN.md`](DESIGN.md)
+
+---
+
+## Use the skill (30 seconds)
 
 ```bash
 npx skills add domuk-k/pubifact
 ```
 
-Then ask your agent to "publish this" or "share this page". That's it.
+Then ask your agent: *"publish this HTML"* or *"share this page"*.
 
-**How the first publish works — init-first.** On the first publish the skill
-detects that no instance is configured and offers to set up your own free
-permanent instance (~2 minutes). No content is uploaded to any third-party host
-— your data only ever reaches your own infrastructure.
+**First run:** if no instance is configured, the skill offers a ~2-minute setup for your own free permanent Worker. No upload happens until you own the endpoint.
 
-Alternatively, install by hand with a symlink:
+Manual install:
 
 ```bash
 ln -s "$PWD/skills/pubifact" ~/.claude/skills/pubifact
 ```
 
-## Set up your own backend (free, permanent)
+---
 
-One-time, ~3 minutes. Needs a free Cloudflare account. The skill's `init.sh`
-walks you through it:
+## Set up your backend (~3 min)
+
+Needs a free [Cloudflare](https://dash.cloudflare.com) account.
 
 ```bash
 bash ~/.claude/skills/pubifact/init.sh setup
 ```
 
-Or click the button below (no CLI needed):
+Or one-click deploy:
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/domuk-k/pubifact/tree/main/worker)
 
-<!-- TODO: verify button resolves worker/ subdir + R2 auto-provision after repo is public -->
-
-After either path, add your endpoint and token to the config file:
+Config written to `~/.config/pubifact/config.json`:
 
 ```json
 {
   "endpoint": "https://pubifact.<account>.workers.dev",
-  "token": "<your-upload-token>"
+  "token": "<upload-token-if-set>"
 }
 ```
 
-Default location: `~/.config/pubifact/config.json` (written automatically by
-`init.sh`; the `token` key is only needed if you set `UPLOAD_TOKEN` on the
-worker).
-
-Environment variables override the config file (advanced / CI use):
+### Manual deploy
 
 ```bash
-export PUBIFACT_ENDPOINT=https://pubifact.<account>.workers.dev
-export PUBIFACT_TOKEN=<your-upload-token>
+cd worker && npm install
+npx wrangler login
+npx wrangler r2 bucket create pubifact
+npx wrangler deploy
+npx wrangler secret put UPLOAD_TOKEN   # recommended
 ```
 
-## What init.sh does, step by step
+**Cost:** Cloudflare free tier — Workers 100k req/day, R2 ~10 GB, **zero egress** for HTML serving.
 
-If you prefer to do it by hand:
-
-```bash
-cd worker
-npm install
-npx wrangler login                         # opens browser, authorize
-npx wrangler r2 bucket create pubifact     # create the storage bucket
-npx wrangler deploy                        # deploy the Worker — prints your URL
-```
-
-Recommended hardening:
-
-```bash
-npx wrangler secret put UPLOAD_TOKEN       # require a bearer token on uploads
-```
-
-Then write `~/.config/pubifact/config.json` with your endpoint and token.
-
-### Cost
-
-Cloudflare free tier covers small usage at ~$0: Workers 100k requests/day, R2
-10 GB storage and **zero egress fees** (ideal for serving HTML).
+---
 
 ## Worker API
 
-| Method & path | Purpose |
-|---------------|---------|
-| `POST /up` | Publish. Body: multipart `file` (preferred) or raw bytes. Returns two text lines — the URL, then a one-time **delete token** — or JSON (`url`, `deleteToken`) if `Accept: application/json`. |
-| `GET /:key` | Serve the page as `text/html`. 404 if unknown. |
-| `HEAD /:key` | Headers only (for link unfurlers). |
-| `DELETE /:key` | Take the page down. `Authorization: Bearer <delete-token>` (or the operator's `UPLOAD_TOKEN` as master key). |
-
-`POST /up` fields / params:
-
-- `file` — the artifact. `.md`/`.markdown` filenames are rendered to HTML;
-  for a raw body use `?type=md` and optionally `?name=foo.md`.
-- `password` — optional. If set, the page requires it to view (HTTP Basic, any
-  username; or `?k=<password>`). Protected pages send `Cache-Control: private`.
-- Size cap: 5 MB. If `UPLOAD_TOKEN` is configured, send `Authorization: Bearer <token>`.
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/up` | Publish file → URL + one-time delete token |
+| `GET` | `/:key` | Serve page (`text/html`) |
+| `HEAD` | `/:key` | Link unfurlers |
+| `DELETE` | `/:key` | Remove page (`Authorization: Bearer <delete-token>`) |
 
 ```bash
 curl -F file=@page.html https://<your>.workers.dev/up
 curl -F file=@notes.md -F password=hunter2 https://<your>.workers.dev/up
-
-# take it down later (token = line 2 of the publish response)
-curl -X DELETE -H "Authorization: Bearer <delete-token>" https://<your>.workers.dev/x7qk2abc.html
-# or from the skill:
-bash skills/pubifact/publish.sh --down <url> --token <delete-token>
 ```
 
-The delete token is shown **once**, at publish time. A page published before
-this feature existed can only be removed with the operator's `UPLOAD_TOKEN`.
+Markdown (`.md`), size cap 5 MB, optional `UPLOAD_TOKEN` on uploads.
 
-## Caveats
+---
 
-- Pages are hosted on a **public host**; without `--password` anyone with the
-  link can open it and its JS runs. Use `--password` for private content.
-- `--password` gates *reading* (good for "share with specific people"). It is
-  **not** a fit for NDA/regulated data: content still lives in your R2, and the
-  gate is only as strong as the password. Keep contractually-restricted material
-  in sanctioned infra.
-- An open upload endpoint can be abused; flip on `UPLOAD_TOKEN`, the 5 MB cap,
-  or Cloudflare rate-limiting if needed.
-- Artifacts must be self-contained — inline assets, no relative file refs.
+## Security notes
+
+- Public URLs are **world-readable** unless `--password` is set.
+- Password gates viewing; not for regulated/NDA data — use sanctioned infra for that.
+- Enable `UPLOAD_TOKEN` + rate limits on public deployments.
+- Artifacts must be self-contained (inline assets; no relative file refs).
+
+See [SECURITY.md](SECURITY.md) for the full trust model.
+
+---
+
+## Related
+
+- [domuk-k](https://github.com/domuk-k) agent infrastructure
+- [oh-my-workflow](https://github.com/domuk-k/oh-my-workflow) — orchestrate agents that produce artifacts to publish
+- Cloudflare skill: `wrangler`, `workers-best-practices`
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Security
-
-See [SECURITY.md](SECURITY.md) for the trust model and how to report
-vulnerabilities.
+[CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 
